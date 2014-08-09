@@ -1,0 +1,4 @@
+scribe
+======
+
+Simple persistence manager
