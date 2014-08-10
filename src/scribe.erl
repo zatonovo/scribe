@@ -18,7 +18,7 @@
 -export([list/1, list/2, read/2, write/3, delete/2,
   register_path/3, get_path/2, get_paths/0]).
 
--record(state, {keys=#{}, auth, cache=[]}).
+-record(state, {keys= #{}, auth, cache=[]}).
 
 start_link() -> start_link([]).
 
