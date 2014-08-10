@@ -18,6 +18,7 @@
 -export([list/1, list/2, read/2, write/3, delete/2,
   register_path/3, get_path/2, get_paths/0]).
 
+%-record(state, {keys= #{}, auth, cache=[]}).
 -record(state, {keys= #{}, auth, cache=[]}).
 
 start_link() -> start_link([]).
@@ -119,7 +120,8 @@ p_deserialize(Content) ->
 
 init(_Args) ->
   lager:info("[~p] Starting up",[?MODULE]),
-  {ok, #state{}}.
+  Keys = #{},
+  {ok, #state{keys=Keys}}.
 
 handle_cast({write, Key, Data, Map}, State) when is_map(Map) ->
   lager:debug("[~p] Enter handle_cast({write, Key, Data, Map})", [?MODULE]),
