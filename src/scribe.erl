@@ -18,7 +18,6 @@
 -export([list/1, list/2, read/2, write/3, delete/2,
   register_path/3, get_path/2, get_paths/0]).
 
-%-record(state, {keys= #{}, auth, cache=[]}).
 -record(state, {keys= #{}, auth, cache=[]}).
 
 start_link() -> start_link([]).
@@ -55,14 +54,19 @@ get_paths() ->
   gen_server:call(?MODULE, get_paths).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% PRIVATE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+p_get(K,Map,Default) ->
+  try maps:get(K,Map)
+  catch _:_ -> Default
+  end.
+
 p_get_path(Key, Keys) ->
   %Keys#{Key}.
-  maps:get(Key,Keys, not_found).
+  p_get(Key,Keys, not_found).
 
 p_get_path(Key, Keys, Map) ->
   %lager:info("[~p] Getting key ~p from ~p", [?MODULE,Key, maps:keys(Keys)]),
   % TODO: Handle non-existent paths
-  case maps:get(Key,Keys, not_found) of
+  case p_get(Key,Keys, not_found) of
     not_found -> not_found;
     {Bucket,RawPath} ->
       MKeys = maps:keys(Map),
@@ -120,8 +124,7 @@ p_deserialize(Content) ->
 
 init(_Args) ->
   lager:info("[~p] Starting up",[?MODULE]),
-  Keys = #{},
-  {ok, #state{keys=Keys}}.
+  {ok, #state{}}.
 
 handle_cast({write, Key, Data, Map}, State) when is_map(Map) ->
   lager:debug("[~p] Enter handle_cast({write, Key, Data, Map})", [?MODULE]),
