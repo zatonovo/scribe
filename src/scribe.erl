@@ -16,6 +16,7 @@
   handle_call/3, handle_cast/2, handle_info/2]).
 -export([init/1, code_change/3, terminate/2]).
 -export([list/1, list/2, read/2, write/3, delete/2,
+  push/3, pop/0,
   register_path/3, get_path/2, get_paths/0]).
 
 -record(state, {keys= #{}, auth, cache=[]}).
@@ -40,6 +41,14 @@ read(Key, Map) ->
 
 write(Key, Data, Map) ->
   gen_server:cast(?MODULE, {write, Key, Data, Map}).
+
+%% Push a record to the cache. Do this when a write process fails
+push(Bucket, Key, Data) ->
+  gen_server:cast(?MODULE, {push, Bucket, Key, Data}).
+
+%% Pop a record from the cache and write. Do this after a successful write
+pop() ->
+  gen_server:cast(?MODULE, pop).
 
 delete(Key, Map) ->
   gen_server:cast(?MODULE, {delete, Key, Map}).
@@ -79,26 +88,28 @@ p_get_path(Key, Keys, Map) ->
       {Bucket, binary_to_list(lists:foldl(Fn, RawPath, MKeys))}
   end.
   
-p_do_write(Bucket, Key, Data, ContentType, #state{}=State) ->
-  lager:debug("[~p] Writing data to {~p, ~p}", [?MODULE, Bucket,Key]),
-  try
-    HttpHeaders = [{"content-type",ContentType}],
-    % This blocks
-    erlcloud_s3:put_object(Bucket, Key, Data, [], HttpHeaders),
-    % So if successful, queue up another put
-    case State#state.cache of
-      [] -> State;
-      [{B,K,D}|Tail] ->
-        lager:debug("[~p] Popping ~p from cache", [?MODULE,K]),
-        scribe:write(B,K,D),
-        State#state{cache=Tail}
-    end
-  catch error:{aws_error,{socket_error,E}} ->
-    lager:warning("[~p] Caching due to AWS socket error: ~p", [?MODULE,E]),
-    % Cache in state until error resolved (hopefully memory doesn't blow up)
-    Cache = State#state.cache,
-    State#state{cache=[{Bucket,Key,Data}|Cache]}
+p_get_content_type(Data) ->
+  case is_bitstring(Data) of
+    true -> {Data,"text/plain"};
+    false -> {term_to_binary(Data),"application/octet_stream"}
   end.
+
+p_do_write(Bucket, Key, Data, ContentType) ->
+  lager:debug("[~p] Writing data to {~p, ~p}", [?MODULE, Bucket,Key]),
+  % Spawn this so it doesn't block scribe
+  Fn = fun() ->
+    try
+      HttpHeaders = [{"content-type",ContentType}],
+      erlcloud_s3:put_object(Bucket, Key, Data, [], HttpHeaders),
+      % If successful, queue up another put
+      scribe:pop()
+    catch error:{aws_error,{socket_error,E}} ->
+      % Cache in state until error resolved (hopefully memory doesn't blow up)
+      lager:warning("[~p] Caching due to AWS socket error: ~p", [?MODULE,E]),
+      scribe:push(Bucket, Key, Data)
+    end
+  end,
+  erlang:spawn(Fn).
 
 p_do_delete(Bucket, Key) ->
   try
@@ -139,13 +150,10 @@ handle_cast({write, Key, Data, Map}, State) when is_map(Map) ->
 
 handle_cast({write, Bucket, Key, Data}, State) ->
   lager:debug("[~p] Enter handle_cast({write, Bucket, Key, Data})", [?MODULE]),
-  {BinData,ContentType} = case is_bitstring(Data) of
-    true -> {Data,"text/plain"};
-    false -> {term_to_binary(Data),"application/octet_stream"}
-  end,
-  NextState = p_do_write(Bucket,Key,BinData, ContentType, State),
+  {BinData,ContentType} = p_get_content_type(Data),
+  p_do_write(Bucket,Key,BinData, ContentType),
   lager:debug("[~p] Exit handle_cast({write, Bucket, Key, Data})", [?MODULE]),
-  {noreply, NextState};
+  {noreply, State};
 
 handle_cast({delete, Key, Map}, State) ->
   lager:debug("[~p] Enter handle_cast({delete, Key, Map})", [?MODULE]),
@@ -157,6 +165,22 @@ handle_cast({delete, Key, Map}, State) ->
   end,
   lager:debug("[~p] Exit handle_cast({write, Key, Data, Map})", [?MODULE]),
   {noreply, State};
+
+
+%% Push a record to the cache for a later write
+handle_cast({push, Bucket, Key, Data}, #state{cache=Cache}=State) ->
+  {noreply, State#state{cache=[{Bucket,Key,Data}|Cache]}};
+  
+handle_cast(pop, #state{cache=Cache}=State) ->
+  State1 = case Cache of
+    [] -> State;
+    [{B,K,D}|Tail] ->
+      lager:debug("[~p] Popping ~p from cache", [?MODULE,K]),
+      {Data,ContentType} = p_get_content_type(D),
+      p_do_write(B,K,Data,ContentType),
+      State#state{cache=Tail}
+  end,
+  {noreply, State1};
 
 handle_cast({register_path, Key, Path}, #state{keys=Keys}=State) ->
   %NextKeys = Keys#{Key => Path},
