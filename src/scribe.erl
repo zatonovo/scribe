@@ -17,6 +17,7 @@
 -export([init/1, code_change/3, terminate/2]).
 -export([list/1, list/2, read/2, write/3, delete/2,
   push/3, pop/0,
+  cache_size/0,
   register_path/3, get_path/2, get_paths/0]).
 
 -record(state, {keys= #{}, auth, cache=[]}).
@@ -49,6 +50,9 @@ push(Bucket, Key, Data) ->
 %% Pop a record from the cache and write. Do this after a successful write
 pop() ->
   gen_server:cast(?MODULE, pop).
+
+cache_size() ->
+  gen_server:call(?MODULE, cache_size).
 
 delete(Key, Map) ->
   gen_server:cast(?MODULE, {delete, Key, Map}).
@@ -188,6 +192,9 @@ handle_cast({register_path, Key, Path}, #state{keys=Keys}=State) ->
   lager:info("[~p] Adding ~p => ~p", [?MODULE,Key,Path]),
   {noreply, State#state{keys=NextKeys}}.
 
+
+handle_call(cache_size, _From, State) ->
+  {reply, length(State#state.cache), State};
 
 handle_call(get_paths, _From, State) ->
   {reply, State#state.keys, State};
