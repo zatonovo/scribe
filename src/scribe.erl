@@ -15,7 +15,9 @@
 -export([start_link/0, start_link/1,
   handle_call/3, handle_cast/2, handle_info/2]).
 -export([init/1, code_change/3, terminate/2]).
--export([list/1, list/2, read/2, write/3, delete/2,
+-export([list/1, list/2, list/3,
+  read/2, read/3,
+  write/3, delete/2,
   push/3, pop/0,
   cache_size/0,
   register_path/3, get_path/2, get_paths/0]).
@@ -33,12 +35,16 @@ list(Bucket) ->
   gen_server:call(?MODULE, {list, Bucket}).
 
 % scribe:list(<<"/friends">>, #{<<"$user_id">> => <<"65847190">>}).
-list(Key, Map) ->
-  gen_server:call(?MODULE, {list, Key, Map}).
+list(Key, Map) -> list(Key, Map, false).
+
+list(Key, Map, Meta) ->
+  gen_server:call(?MODULE, {list, Key, Map, Meta}).
   
 
-read(Key, Map) ->
-  gen_server:call(?MODULE, {read, Key, Map}, infinity).
+read(Key, Map) -> read(Key, Map, false).
+
+read(Key, Map, Meta) ->
+  gen_server:call(?MODULE, {read, Key, Map, Meta}, infinity).
 
 write(Key, Data, Map) ->
   gen_server:cast(?MODULE, {write, Key, Data, Map}).
@@ -209,7 +215,7 @@ handle_call({list, Bucket}, _From, State) ->
   lager:debug("[~p] Exit handle_call({list, Bucket})", [?MODULE]),
   {reply, Reply, State};
 
-handle_call({list, Key, Map}, _From, State) ->
+handle_call({list, Key, Map, Meta}, _From, State) ->
   lager:debug("[~p] Enter handle_call({list, Key, Map})", [?MODULE]),
   Content = case p_get_path(Key, State#state.keys, Map) of
     not_found -> not_found;
@@ -217,8 +223,12 @@ handle_call({list, Key, Map}, _From, State) ->
       lager:debug("[~p] Listing objects in {~p, ~p}", [?MODULE, Bucket,K]),
       try
         PList = erlcloud_s3:list_objects(Bucket, [{prefix,K}] ),
-        Objects = proplists:get_value(contents,PList),
-        [ proplists:get_value(key, Object) || Object <- Objects ]
+        case Meta of
+          true -> PList;
+          false ->
+            Objects = proplists:get_value(contents,PList),
+            [ proplists:get_value(key, Object) || Object <- Objects ]
+        end
       catch 
         error:{aws_error, {http_error, 404,_,_}} -> not_found;
         error:Error ->
@@ -231,7 +241,7 @@ handle_call({list, Key, Map}, _From, State) ->
   lager:debug("[~p] Exit handle_call({list, Key, Map})", [?MODULE]),
   {reply, Reply, State};
 
-handle_call({read, Key, Map}, _From, State) ->
+handle_call({read, Key, Map, Meta}, _From, State) ->
   lager:debug("[~p] Enter handle_call({read, Key, Map})", [?MODULE]),
   Content = case p_get_path(Key, State#state.keys, Map) of
     not_found -> not_found;
@@ -239,7 +249,10 @@ handle_call({read, Key, Map}, _From, State) ->
       lager:debug("[~p] Reading data from {~p, ~p}", [?MODULE, Bucket,K]),
       try
         PList = erlcloud_s3:get_object(Bucket, K),
-        proplists:get_value(content,PList)
+        case Meta of
+          true -> PList;
+          false -> proplists:get_value(content,PList)
+        end
       catch 
         error:{aws_error, {http_error, 404,_,_}} -> not_found;
         error:Error ->
